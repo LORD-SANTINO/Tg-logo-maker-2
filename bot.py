@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse
 import requests
 import os
@@ -9,7 +9,6 @@ DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    # Simple form for entering the logo description
     return """
     <html>
         <head>
@@ -28,17 +27,25 @@ def home():
 
 @app.post("/generate", response_class=HTMLResponse)
 def generate_logo(prompt: str = Form(...)):
+    if not DEEPAI_API_KEY:
+        raise HTTPException(status_code=500, detail="DeepAI API key not configured")
+    
     url = "https://api.deepai.org/api/logo-generator"
-    response = requests.post(
-        url,
-        data={"text": prompt},
-        headers={"api-key": DEEPAI_API_KEY}
-    )
-    result = response.json()
-    logo_url = result.get("output_url", None)
+    try:
+        response = requests.post(
+            url,
+            data={"text": prompt},
+            headers={"api-key": DEEPAI_API_KEY},
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+    except Exception as e:
+        return f"<h2>Error generating logo: {e}</h2>"
 
-    if logo_url is None:
-        return f"<h2>Failed to generate logo. Please try again.</h2>"
+    logo_url = result.get("output_url")
+    if not logo_url:
+        return "<h2>Failed to generate logo. Please try again.</h2>"
 
     return f"""
     <html>
@@ -50,4 +57,4 @@ def generate_logo(prompt: str = Form(...)):
         </body>
     </html>
     """
-                  
+            
