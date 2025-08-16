@@ -2,18 +2,18 @@ from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse
 import requests
 import os
+import time
 
 app = FastAPI()
 
-DEEPAI_API_KEY = os.getenv("DEEPAI_API_KEY")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
+REPLICATE_MODEL_VERSION = "7b995189f2b87bee1696ac0b457fea3886f0c5e9963d6d9cc765f6de61215092"  # Stable Diffusion 2 logo-ish model example, update if needed
 
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
     <html>
-        <head>
-            <title>AI Logo Generator</title>
-        </head>
+        <head><title>AI Logo Generator using Replicate</title></head>
         <body>
             <h1>AI Logo Generator</h1>
             <form action="/generate" method="post">
@@ -27,34 +27,61 @@ def home():
 
 @app.post("/generate", response_class=HTMLResponse)
 def generate_logo(prompt: str = Form(...)):
-    if not DEEPAI_API_KEY:
-        raise HTTPException(status_code=500, detail="DeepAI API key not configured")
-    
-    url = "https://api.deepai.org/api/logo-generator"
+    if not REPLICATE_API_TOKEN:
+        raise HTTPException(status_code=500, detail="Replicate API token not configured")
+
+    headers = {
+        "Authorization": f"Token {REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    json_data = {
+        "version": REPLICATE_MODEL_VERSION,
+        "input": {
+            "prompt": prompt,
+        },
+    }
+
     try:
+        # Kick off prediction
         response = requests.post(
-            url,
-            data={"text": prompt},
-            headers={"api-key": DEEPAI_API_KEY},
-            timeout=10
+            "https://api.replicate.com/v1/predictions",
+            headers=headers,
+            json=json_data
         )
         response.raise_for_status()
-        result = response.json()
+        prediction = response.json()
+
+        # Poll for completion
+        prediction_url = prediction["urls"]["get"]
+        status = prediction["status"]
+
+        while status not in ("succeeded", "failed", "canceled"):
+            time.sleep(1)
+            r = requests.get(prediction_url, headers=headers)
+            r.raise_for_status()
+            prediction = r.json()
+            status = prediction["status"]
+
+        if status != "succeeded":
+            return f"<h2>Prediction failed with status: {status}</h2>"
+
+        # Get output image(s)
+        output = prediction.get("output", [])
+        # Replicate may return a list of image URLs
+        logo_url = output[0] if isinstance(output, list) and output else None
+
+        if not logo_url:
+            return "<h2>Failed to generate logo image URL.</h2>"
+
+        return f"""
+        <html>
+            <head><title>Logo Result</title></head>
+            <body>
+                <h1>Your Logo</h1>
+                <img src="{logo_url}" alt="Generated Logo" style="max-width:300px;"/>
+                <p><a href="/">Generate another</a></p>
+            </body>
+        </html>
+        """
     except Exception as e:
-        return f"<h2>Error generating logo: {e}</h2>"
-
-    logo_url = result.get("output_url")
-    if not logo_url:
-        return "<h2>Failed to generate logo. Please try again.</h2>"
-
-    return f"""
-    <html>
-        <head><title>Logo Result</title></head>
-        <body>
-            <h1>Your Logo</h1>
-            <img src="{logo_url}" alt="Generated Logo" style="max-width:300px;"/>
-            <p><a href="/">Generate another</a></p>
-        </body>
-    </html>
-    """
-            
+        return f"<h2>Error during logo generation: {e}</h2>"
